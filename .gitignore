@@ -1,0 +1,30 @@
+# Build Output
+/build*/
+!/BuildSystem/
+**/bin/
+**/bin-int/
+**/obj/
+Intermediates/
+Binaries/
+
+# Executables & Libraries
+*.exe
+
+# IDE Files
+.vs/
+.vscode/
+.idea/
+out/
+*.sln
+*.vcxproj*
+*.user
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# LFS Folders
+lfs/
+hooks/
