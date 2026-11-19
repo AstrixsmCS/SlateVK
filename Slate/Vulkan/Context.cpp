@@ -20,11 +20,7 @@ namespace Slate
 			return;
 		}
 
-		if (volkInitializeCustom(getInstanceProcAddr) != VK_SUCCESS)
-		{
-			std::println(stderr, "Failed to initialize volk!");
-			return;
-		}
+		volkInitializeCustom(getInstanceProcAddr);
 
 		uint32_t sdlExtensionCount = 0;
 		const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
