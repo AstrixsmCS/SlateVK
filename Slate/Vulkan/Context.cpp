@@ -24,27 +24,21 @@ namespace Slate
 
 		uint32_t sdlExtensionCount = 0;
 		const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-		std::vector<const char*> requestedExtensions
+
+		std::vector<const char*> requestedExtensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
+		std::vector<const char*> requestedLayers;
+
+		if (config.EnableValidation)
 		{
-			VK_EXT_DEBUG_UTILS_EXTENSION_NAME
-		};
-		for (int i = 0; i < sdlExtensionCount; ++i)
-		{
-			requestedExtensions.push_back(sdlExtensions[i]);
+			requestedExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+			requestedLayers.push_back("VK_LAYER_KHRONOS_validation");
 		}
-
-		//std::vector<const char*> requestedExtensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
-
-		std::vector<const char*> requestedLayers
-		{
-			"VK_LAYER_KHRONOS_validation"
-		};
 
 		const VkApplicationInfo appInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
 			.pApplicationName = "SlateVK",
-			.apiVersion = VK_API_VERSION_1_4
+			.apiVersion = m_Config.Version == VulkanVersion_1_4 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_3
 		};
 
 		const VkInstanceCreateInfo instanceCreateInfo
@@ -65,6 +59,8 @@ namespace Slate
 		}
 
 		volkLoadInstance(m_Instance);
+
+		// TODO: Debug Messenger
 
 		if (!SDL_Vulkan_CreateSurface(m_Window, m_Instance, nullptr, &m_Surface))
 		{
@@ -87,7 +83,7 @@ namespace Slate
 
 		if (m_Surface != VK_NULL_HANDLE)
 		{
-			vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
+			SDL_Vulkan_DestroySurface(m_Instance, m_Surface, nullptr);
 		}
 
 		if (m_DebugMessenger != VK_NULL_HANDLE)
