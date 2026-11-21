@@ -11,14 +11,12 @@ namespace Slate
 
 		auto context = std::make_unique<VulkanContext>(window, config);
 
-		/*const auto devices = context->QueryDevices();
+		const auto physicalDevice = context->SelectPhysicalDevice();
 
-		if (devices.empty())
+		if (physicalDevice == VK_NULL_HANDLE)
 			return nullptr;
 
-		const VkPhysicalDevice physicalDevice = devices.front();
-
-		if (context->InitializeContext(physicalDevice) != VK_SUCCESS)
+		/*if (context->InitializeContext(physicalDevice) != VK_SUCCESS)
 			return nullptr;
 
 		if (context->InitializeSwapChain() != VK_SUCCESS)

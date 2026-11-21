@@ -41,12 +41,19 @@ namespace Slate
 		uint32_t sdlExtensionCount = 0;
 		const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
 
+		if (!sdlExtensions)
+		{
+			std::println(stderr, "Failed to get Vulkan extensions: {}", SDL_GetError());
+			return;
+		}
+
 		std::vector<const char*> requestedExtensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
 		std::vector<const char*> requestedLayers;
 
 		if (config.EnableValidation)
 		{
 			requestedExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+			requestedExtensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
 			requestedLayers.push_back("VK_LAYER_KHRONOS_validation");
 		}
 
@@ -60,16 +67,45 @@ namespace Slate
 		const VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-			.pNext = nullptr, // TODO: Layer settings (GPU-AV & Sync val)
 			.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
 			.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
 			.pfnUserCallback = DebugCallback,
 		};
 
+		const VkBool32 enableGpuValidation = config.EnableValidationGpu ? VK_TRUE : VK_FALSE;
+		const VkBool32 enableSyncValidation = config.EnableValidationSync ? VK_TRUE : VK_FALSE;
+
+		const VkLayerSettingEXT layerSettings[]
+		{
+			{
+				.pLayerName = "VK_LAYER_KHRONOS_validation",
+				.pSettingName = "gpuav_enable",
+				.type = VK_LAYER_SETTING_TYPE_BOOL32_EXT,
+				.valueCount = 1,
+				.pValues = &enableGpuValidation,
+
+			},
+			{
+				.pLayerName = "VK_LAYER_KHRONOS_validation",
+				.pSettingName = "validate_sync",
+				.type = VK_LAYER_SETTING_TYPE_BOOL32_EXT,
+				.valueCount = 1,
+				.pValues = &enableSyncValidation,
+			}
+		};
+
+		const VkLayerSettingsCreateInfoEXT layerSettingsCreateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT,
+			.pNext = &debugCreateInfo,
+			.settingCount = 2,
+			.pSettings = layerSettings
+		};
+
 		const VkInstanceCreateInfo instanceCreateInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-			.pNext = config.EnableValidation ? &debugCreateInfo : nullptr,
+			.pNext = config.EnableValidation ? &layerSettingsCreateInfo : nullptr,
 			.pApplicationInfo = &applicationInfo,
 			.enabledLayerCount = static_cast<uint32_t>(requestedLayers.size()),
 			.ppEnabledLayerNames = requestedLayers.data(),
@@ -84,15 +120,6 @@ namespace Slate
 		if (config.EnableValidation)
 		{
 			VK_CHECK(vkCreateDebugUtilsMessengerEXT(m_Instance, &debugCreateInfo, nullptr, &m_DebugMessenger));
-
-			// Temporary debug messenger test
-			const VkDebugUtilsMessengerCallbackDataEXT callbackData
-			{
-				.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT,
-				.pMessageIdName = "SlateVK Test",
-				.pMessage = "Debug messenger is working!"
-			};
-			vkSubmitDebugUtilsMessageEXT(m_Instance, VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT, &callbackData);
 		}
 
 		if (!SDL_Vulkan_CreateSurface(m_Window, m_Instance, nullptr, &m_Surface))
@@ -132,21 +159,48 @@ namespace Slate
 		volkFinalize();
 	}
 
-	std::vector<VkPhysicalDevice> VulkanContext::QueryDevices() const
+	VkPhysicalDevice VulkanContext::SelectPhysicalDevice() const
 	{
-		// VkEnumeratePhysicalDevices()
-		return {};
+		uint32_t deviceCount = 0;
+		VK_CHECK(vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr));
+
+		if (deviceCount == 0)
+			return VK_NULL_HANDLE;
+
+		std::vector<VkPhysicalDevice> devices(deviceCount);
+		VK_CHECK(vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices.data()));
+
+		VkPhysicalDevice selectedDevice = nullptr;
+		if (deviceCount)
+		{
+			selectedDevice = devices[0];
+
+			for (auto &device : devices)
+			{
+				VkPhysicalDeviceProperties properties{};
+				vkGetPhysicalDeviceProperties(device, &properties);
+				if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+				{
+					selectedDevice = device;
+					break;
+				}
+			}
+		}
+
+		VkPhysicalDeviceProperties properties{};
+		vkGetPhysicalDeviceProperties(selectedDevice, &properties);
+		std::println("Selected Physical Device: {}", properties.deviceName);
+
+		return selectedDevice;
 	}
 
-	VkResult VulkanContext::InitializeContext(VkPhysicalDevice physicalDevice)
+	bool VulkanContext::CreateDevice(VkPhysicalDevice physicalDevice)
 	{
-		m_PhysicalDevice = physicalDevice;
-
-		return VK_ERROR_INITIALIZATION_FAILED;
+		return false;
 	}
 
-	VkResult VulkanContext::InitializeSwapChain()
+	bool VulkanContext::CreateSwapChain()
 	{
-		return VK_ERROR_INITIALIZATION_FAILED;
+		return false;
 	}
 }
