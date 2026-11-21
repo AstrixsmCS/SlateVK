@@ -1,5 +1,7 @@
 #include "Context.hpp"
 
+#include "Vulkan.hpp"
+
 #define VOLK_IMPLEMENTATION
 #include <volk.h>
 
@@ -9,6 +11,20 @@
 
 namespace Slate
 {
+	static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
+		VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+		[[maybe_unused]] VkDebugUtilsMessageTypeFlagsEXT messageType,
+		const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+		[[maybe_unused]] void* pUserData)
+	{
+		if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+		{
+			std::println("Validation Layer: {}", pCallbackData->pMessage);
+		}
+
+		return VK_FALSE;
+	}
+
 	VulkanContext::VulkanContext(SDL_Window* window, const ContextConfig& config)
 		: m_Window(window), m_Config(config)
 	{
@@ -34,33 +50,50 @@ namespace Slate
 			requestedLayers.push_back("VK_LAYER_KHRONOS_validation");
 		}
 
-		const VkApplicationInfo appInfo
+		const VkApplicationInfo applicationInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
 			.pApplicationName = "SlateVK",
-			.apiVersion = m_Config.Version == VulkanVersion_1_4 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_3
+			.apiVersion = config.Version == VulkanVersion_1_4 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_3
+		};
+
+		const VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+			.pNext = nullptr, // TODO: Layer settings (GPU-AV & Sync val)
+			.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+			.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+			.pfnUserCallback = DebugCallback,
 		};
 
 		const VkInstanceCreateInfo instanceCreateInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-			.pNext = nullptr,
-			.pApplicationInfo = &appInfo,
+			.pNext = config.EnableValidation ? &debugCreateInfo : nullptr,
+			.pApplicationInfo = &applicationInfo,
 			.enabledLayerCount = static_cast<uint32_t>(requestedLayers.size()),
 			.ppEnabledLayerNames = requestedLayers.data(),
 			.enabledExtensionCount = static_cast<uint32_t>(requestedExtensions.size()),
 			.ppEnabledExtensionNames = requestedExtensions.data()
 		};
 
-		if (vkCreateInstance(&instanceCreateInfo, nullptr, &m_Instance) != VK_SUCCESS)
-		{
-			std::println(stderr, "Failed to create Vulkan instance!");
-			return;
-		}
+		VK_CHECK(vkCreateInstance(&instanceCreateInfo, nullptr, &m_Instance));
 
 		volkLoadInstance(m_Instance);
 
-		// TODO: Debug Messenger
+		if (config.EnableValidation)
+		{
+			VK_CHECK(vkCreateDebugUtilsMessengerEXT(m_Instance, &debugCreateInfo, nullptr, &m_DebugMessenger));
+
+			// Temporary debug messenger test
+			const VkDebugUtilsMessengerCallbackDataEXT callbackData
+			{
+				.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT,
+				.pMessageIdName = "SlateVK Test",
+				.pMessage = "Debug messenger is working!"
+			};
+			vkSubmitDebugUtilsMessageEXT(m_Instance, VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT, &callbackData);
+		}
 
 		if (!SDL_Vulkan_CreateSurface(m_Window, m_Instance, nullptr, &m_Surface))
 		{

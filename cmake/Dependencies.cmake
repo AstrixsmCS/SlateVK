@@ -13,9 +13,14 @@ set(VULKAN_HEADERS_ENABLE_MODULE OFF)
 set(VOLK_PULL_IN_VULKAN OFF)
 set(VOLK_INSTALL OFF)
 set(VMA_ENABLE_INSTALL OFF)
+set(VUL_ENABLE_INSTALL OFF)
 
 if(NOT TARGET Vulkan::Headers)
 	add_subdirectory("${PROJECT_SOURCE_DIR}/External/Vulkan-Headers" "${PROJECT_BINARY_DIR}/_deps/vulkan-headers" EXCLUDE_FROM_ALL)
+endif()
+
+if(NOT TARGET Vulkan::UtilityHeaders)
+	add_subdirectory("${PROJECT_SOURCE_DIR}/External/Vulkan-Utility-Libraries" "${PROJECT_BINARY_DIR}/_deps/vulkan-utility-libraries" EXCLUDE_FROM_ALL)
 endif()
 
 # Slate defines VOLK_IMPLEMENTATION itself, so use volk's header-only target.

@@ -1,6 +1,7 @@
 add_library(Slate STATIC
 		Slate.cpp
 		Slate.hpp
+		Vulkan/Vulkan.hpp
 		Vulkan/Context.cpp
 		Vulkan/Context.hpp
 )
@@ -18,6 +19,7 @@ target_link_libraries(Slate
 		Vulkan::Headers
 		volk_headers
 		PRIVATE
+		Vulkan::UtilityHeaders
 		GPUOpen::VulkanMemoryAllocator
 		SDL3::SDL3
 		slang::slang
