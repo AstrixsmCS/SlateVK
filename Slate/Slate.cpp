@@ -16,11 +16,16 @@ namespace Slate
 		if (physicalDevice == VK_NULL_HANDLE)
 			return nullptr;
 
-		/*if (context->InitializeContext(physicalDevice) != VK_SUCCESS)
+		if (!context->FindGraphicsQueue())
 			return nullptr;
 
-		if (context->InitializeSwapChain() != VK_SUCCESS)
-			return nullptr;*/
+		if (!context->CreateDevice(physicalDevice))
+			return nullptr;
+
+		if (!context->InitializeVMA())
+			return nullptr;
+
+		// TODO: Create swapchain.
 
 		return context;
 	}

@@ -5,6 +5,9 @@
 #define VOLK_IMPLEMENTATION
 #include <volk.h>
 
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.h>
+
 #include <SDL3/SDL_Vulkan.h>
 
 #include <print>
@@ -56,6 +59,9 @@ namespace Slate
 			requestedExtensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
 			requestedLayers.push_back("VK_LAYER_KHRONOS_validation");
 		}
+
+		for (const char* extension : requestedExtensions)
+			std::println("Instance Extension: {}", extension);
 
 		const VkApplicationInfo applicationInfo
 		{
@@ -127,8 +133,6 @@ namespace Slate
 			std::println(stderr, "Failed to create Vulkan surface: {}", SDL_GetError());
 			return;
 		}
-
-		std::println("Vulkan instance created successfully.");
 	}
 
 	VulkanContext::~VulkanContext()
@@ -138,6 +142,15 @@ namespace Slate
 		if (m_Device != VK_NULL_HANDLE)
 		{
 			vkDeviceWaitIdle(m_Device);
+		}
+
+		if (m_VmaAllocator != VK_NULL_HANDLE)
+		{
+			vmaDestroyAllocator(m_VmaAllocator);
+		}
+
+		if (m_Device != VK_NULL_HANDLE)
+		{
 			vkDestroyDevice(m_Device, nullptr);
 		}
 
@@ -159,7 +172,7 @@ namespace Slate
 		volkFinalize();
 	}
 
-	VkPhysicalDevice VulkanContext::SelectPhysicalDevice() const
+	VkPhysicalDevice VulkanContext::SelectPhysicalDevice()
 	{
 		uint32_t deviceCount = 0;
 		VK_CHECK(vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr));
@@ -187,19 +200,150 @@ namespace Slate
 			}
 		}
 
-		VkPhysicalDeviceProperties properties{};
-		vkGetPhysicalDeviceProperties(selectedDevice, &properties);
-		std::println("Selected Physical Device: {}", properties.deviceName);
+		m_PhysicalDevice = selectedDevice;
 
-		return selectedDevice;
+		return m_PhysicalDevice;
+	}
+
+	bool VulkanContext::FindGraphicsQueue()
+	{
+		uint32_t queueFamilyCount = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties2(m_PhysicalDevice, &queueFamilyCount, nullptr);
+
+		std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount, { .sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2 });
+		vkGetPhysicalDeviceQueueFamilyProperties2(m_PhysicalDevice, &queueFamilyCount, queueFamilies.data());
+
+		for (uint32_t familyIndex = 0; familyIndex < queueFamilies.size(); familyIndex++)
+		{
+			VkBool32 supportsPresent = VK_FALSE;
+			VK_CHECK(vkGetPhysicalDeviceSurfaceSupportKHR(m_PhysicalDevice, familyIndex, m_Surface, &supportsPresent));
+
+			const auto &properties = queueFamilies[familyIndex];
+
+			if (properties.queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT && supportsPresent)
+			{
+				m_GraphicsQueueFamilyIndex = familyIndex;
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	bool VulkanContext::CreateDevice(VkPhysicalDevice physicalDevice)
 	{
-		return false;
+		VkPhysicalDeviceVulkan14Features supportedFeatures14
+		{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES, .pNext = nullptr };
+		VkPhysicalDeviceVulkan13Features supportedFeatures13
+		{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, .pNext = &supportedFeatures14 };
+		VkPhysicalDeviceVulkan12Features supportedFeatures12
+		{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &supportedFeatures13 };
+		VkPhysicalDeviceFeatures2 supportedFeatures
+		{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &supportedFeatures12 };
+		vkGetPhysicalDeviceFeatures2(physicalDevice, &supportedFeatures);
+
+		if (!supportedFeatures13.dynamicRendering || !supportedFeatures13.synchronization2 || !supportedFeatures12.timelineSemaphore)
+		{
+			std::println("Physical device doesn't meet the feature requirments");
+			return false;
+		}
+
+		VkPhysicalDeviceVulkan14Features features14
+		{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
+			.pNext = nullptr,
+		};
+		VkPhysicalDeviceVulkan13Features features13
+		{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+			.pNext = &features14,
+			.synchronization2 = VK_TRUE,
+			.dynamicRendering = VK_TRUE,
+		};
+		VkPhysicalDeviceVulkan12Features features12
+		{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+			.pNext = &features13,
+			.timelineSemaphore = VK_TRUE,
+		};
+		VkPhysicalDeviceFeatures2 features
+		{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &features12 };
+
+		std::vector<float> queuePriorities{ 1.0f };
+		VkDeviceQueueCreateInfo GraphicsQueueInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+			.queueFamilyIndex = m_GraphicsQueueFamilyIndex,
+			.queueCount = 1,
+			.pQueuePriorities = queuePriorities.data(),
+		};
+
+		uint32_t extensionCount = 0;
+		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
+
+		std::vector<VkExtensionProperties> extensions(extensionCount);
+		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, extensions.data());
+
+		VkPhysicalDeviceProperties properties{};
+		vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+
+		std::println("Physical device '{}' has {} extensions: ", properties.deviceName, extensions.size());
+
+		for (const auto& extension : extensions)
+		{
+			std::println("{} ", extension.extensionName);
+		}
+
+		const std::vector<const char*> deviceExtensions { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
+		VkDeviceCreateInfo deviceCreateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+			.pNext = &features,
+			.queueCreateInfoCount = 1,
+			.pQueueCreateInfos = &GraphicsQueueInfo,
+			.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
+			.ppEnabledExtensionNames = deviceExtensions.data(),
+			.pEnabledFeatures = nullptr, // features struct chain is set pNext
+		};
+
+		VK_CHECK(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &m_Device));
+
+		volkLoadDevice(m_Device);
+
+		vkGetDeviceQueue(m_Device, m_GraphicsQueueFamilyIndex, 0, &m_GraphicsQueue);
+
+		if (!m_GraphicsQueue)
+		{
+			std::println("Couldn't get the graphics queue.");
+			return false;
+		}
+
+		return true;
 	}
 
-	bool VulkanContext::CreateSwapChain()
+	bool VulkanContext::InitializeVMA()
+	{
+		VmaVulkanFunctions vmaFunctions{};
+
+		VmaAllocatorCreateInfo allocatorCreateInfo
+		{
+			.flags = 0,
+			.physicalDevice = m_PhysicalDevice,
+			.device = m_Device,
+			.pVulkanFunctions = &vmaFunctions,
+			.instance = m_Instance,
+			.vulkanApiVersion = m_Config.Version == VulkanVersion_1_4 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_3,
+		};
+
+		VK_CHECK(vmaImportVulkanFunctionsFromVolk(&allocatorCreateInfo, &vmaFunctions));
+
+		VK_CHECK(vmaCreateAllocator(&allocatorCreateInfo, &m_VmaAllocator));
+
+		return true;
+	}
+
+	bool VulkanContext::CreateSwapChain(uint32_t width, uint32_t height)
 	{
 		return false;
 	}
