@@ -21,6 +21,7 @@ namespace Slate
 		bool CreateDevice(VkPhysicalDevice physicalDevice);
 		bool InitializeVMA();
 		bool CreateSwapChain(uint32_t width, uint32_t height);
+		void DestroySwapChain();
 	private:
 		SDL_Window* m_Window = { nullptr };
 		ContextConfig m_Config {};
@@ -36,5 +37,18 @@ namespace Slate
 		VkQueue m_GraphicsQueue = { VK_NULL_HANDLE };
 
 		VmaAllocator m_VmaAllocator = { VK_NULL_HANDLE };
+
+		VkSwapchainKHR m_Swapchain = { VK_NULL_HANDLE };
+		VkFormat m_SwapchainFormat = { VK_FORMAT_B8G8R8A8_SRGB };
+		std::vector<VkImage> m_SwapchainImages;
+		std::vector<VkImageView> m_SwapchainImageViews;
+		std::vector<VkSemaphore> m_RenderCompleteSemaphores;
+		uint32_t m_SwapchainWidth { 0 };
+		uint32_t m_SwapchainHeight { 0 };
+
+		VkImage m_DepthImage = { VK_NULL_HANDLE };
+		VkImageView m_DepthImageView = { VK_NULL_HANDLE };
+		VkFormat m_DepthFormat = { VK_FORMAT_D32_SFLOAT };
+		VmaAllocation m_DepthImageAllocation = { VK_NULL_HANDLE };
 	};
 }

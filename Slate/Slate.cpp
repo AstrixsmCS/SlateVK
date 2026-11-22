@@ -25,7 +25,8 @@ namespace Slate
 		if (!context->InitializeVMA())
 			return nullptr;
 
-		// TODO: Create swapchain.
+		if (!context->CreateSwapChain(1600, 900))
+			return nullptr;
 
 		return context;
 	}

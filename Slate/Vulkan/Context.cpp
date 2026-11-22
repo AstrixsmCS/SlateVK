@@ -140,34 +140,25 @@ namespace Slate
 		// TODO: Destroy swapchain and associated resources.
 
 		if (m_Device != VK_NULL_HANDLE)
-		{
 			vkDeviceWaitIdle(m_Device);
-		}
-
-		if (m_VmaAllocator != VK_NULL_HANDLE)
-		{
-			vmaDestroyAllocator(m_VmaAllocator);
-		}
 
 		if (m_Device != VK_NULL_HANDLE)
-		{
+			DestroySwapChain();
+
+		if (m_VmaAllocator != VK_NULL_HANDLE)
+			vmaDestroyAllocator(m_VmaAllocator);
+
+		if (m_Device != VK_NULL_HANDLE)
 			vkDestroyDevice(m_Device, nullptr);
-		}
 
 		if (m_Surface != VK_NULL_HANDLE)
-		{
 			SDL_Vulkan_DestroySurface(m_Instance, m_Surface, nullptr);
-		}
 
 		if (m_DebugMessenger != VK_NULL_HANDLE)
-		{
 			vkDestroyDebugUtilsMessengerEXT(m_Instance, m_DebugMessenger, nullptr);
-		}
 
 		if (m_Instance != VK_NULL_HANDLE)
-		{
 			vkDestroyInstance(m_Instance, nullptr);
-		}
 
 		volkFinalize();
 	}
@@ -184,23 +175,43 @@ namespace Slate
 		VK_CHECK(vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices.data()));
 
 		VkPhysicalDevice selectedDevice = nullptr;
-		if (deviceCount)
-		{
-			selectedDevice = devices[0];
 
-			for (auto &device : devices)
+		selectedDevice = devices[0];
+
+		for (auto &device : devices)
+		{
+			VkPhysicalDeviceProperties properties{};
+			vkGetPhysicalDeviceProperties(device, &properties);
+
+			if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
 			{
-				VkPhysicalDeviceProperties properties{};
-				vkGetPhysicalDeviceProperties(device, &properties);
-				if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-				{
-					selectedDevice = device;
-					break;
-				}
+				selectedDevice = device;
+				break;
 			}
 		}
 
 		m_PhysicalDevice = selectedDevice;
+
+		uint32_t formatCount = 0;
+		vkGetPhysicalDeviceSurfaceFormatsKHR(m_PhysicalDevice, m_Surface, &formatCount, nullptr);
+
+		std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
+		vkGetPhysicalDeviceSurfaceFormatsKHR(m_PhysicalDevice, m_Surface, &formatCount, surfaceFormats.data());
+
+		bool formatSupported = false;
+		for (const VkSurfaceFormatKHR &surfaceFormat : surfaceFormats)
+		{
+			if (surfaceFormat.format == m_SwapchainFormat && surfaceFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+			{
+				formatSupported = true;
+				break;
+			}
+		}
+		if (!formatSupported)
+		{
+			std::println("Requested format is not supported by the surface");
+			return nullptr;
+		}
 
 		return m_PhysicalDevice;
 	}
@@ -345,6 +356,131 @@ namespace Slate
 
 	bool VulkanContext::CreateSwapChain(uint32_t width, uint32_t height)
 	{
-		return false;
+		m_SwapchainWidth = width;
+		m_SwapchainHeight = height;
+
+		VkSurfaceCapabilitiesKHR surfaceCaps{};
+
+		VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_PhysicalDevice, m_Surface, &surfaceCaps));
+
+		uint32_t requestedImageCount = std::max(2u, surfaceCaps.minImageCount);
+		if (surfaceCaps.maxImageCount > 0)
+		{
+			requestedImageCount = std::min(requestedImageCount, surfaceCaps.maxImageCount);
+		}
+
+		VkSwapchainCreateInfoKHR swapchainCreateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+			.surface = m_Surface,
+			.minImageCount = requestedImageCount,
+			.imageFormat = m_SwapchainFormat,
+			.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+			.imageExtent = { .width = m_SwapchainWidth, .height = m_SwapchainHeight },
+			.imageArrayLayers = 1,
+			.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+			.preTransform = surfaceCaps.currentTransform,
+			.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+			.presentMode = VK_PRESENT_MODE_FIFO_KHR
+		};
+
+		VK_CHECK(vkCreateSwapchainKHR(m_Device, &swapchainCreateInfo, nullptr, &m_Swapchain));
+
+		uint32_t imageCount = 0;
+		VK_CHECK(vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &imageCount, nullptr));
+		m_SwapchainImages.resize(imageCount);
+		VK_CHECK(vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &imageCount, m_SwapchainImages.data()));
+		m_SwapchainImageViews.resize(imageCount);
+
+		for (uint32_t i = 0; i < m_SwapchainImages.size(); ++i)
+		{
+			VkImageViewCreateInfo imageViewCreateInfo
+			{
+				.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				.image = m_SwapchainImages[i],
+				.viewType = VK_IMAGE_VIEW_TYPE_2D,
+				.format = m_SwapchainFormat,
+				.subresourceRange
+				{
+					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+					.baseMipLevel = 0,
+					.levelCount = 1,
+					.baseArrayLayer = 0,
+					.layerCount = 1
+				}
+			};
+
+			VK_CHECK(vkCreateImageView(m_Device, &imageViewCreateInfo, nullptr, &m_SwapchainImageViews[i]));
+		}
+
+		m_RenderCompleteSemaphores.resize(m_SwapchainImages.size());
+		for (VkSemaphore &semaphore : m_RenderCompleteSemaphores)
+		{
+			VkSemaphoreCreateInfo semaphoreCreateInfo{ .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+			VK_CHECK(vkCreateSemaphore(m_Device, &semaphoreCreateInfo, nullptr, &semaphore));
+		}
+
+		VkImageCreateInfo depthCreateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+			.imageType = VK_IMAGE_TYPE_2D,
+			.format = m_DepthFormat,
+			.extent = { .width = m_SwapchainWidth, .height = m_SwapchainHeight, .depth = 1 },
+			.mipLevels = 1,
+			.arrayLayers = 1,
+			.samples = VK_SAMPLE_COUNT_1_BIT,
+			.tiling = VK_IMAGE_TILING_OPTIMAL,
+			.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+			.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+		};
+
+		VmaAllocationCreateInfo allocationCreateInfo
+		{
+			.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+			.usage = VMA_MEMORY_USAGE_AUTO
+		};
+
+		VK_CHECK(vmaCreateImage(m_VmaAllocator, &depthCreateInfo, &allocationCreateInfo, &m_DepthImage, &m_DepthImageAllocation, nullptr));
+
+		VkImageViewCreateInfo depthImgViewCreateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+			.image = m_DepthImage,
+			.viewType = VK_IMAGE_VIEW_TYPE_2D,
+			.format = m_DepthFormat,
+			.subresourceRange{ .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .levelCount = 1, .layerCount = 1 }
+		};
+
+		VK_CHECK(vkCreateImageView(m_Device, &depthImgViewCreateInfo, nullptr, &m_DepthImageView));
+
+		return true;
+	}
+
+	void VulkanContext::DestroySwapChain()
+	{
+		for (VkImageView swapchainImageView : m_SwapchainImageViews)
+		{
+			vkDestroyImageView(m_Device, swapchainImageView, nullptr);
+		}
+		m_SwapchainImageViews.clear();
+
+		for (VkSemaphore &semaphore : m_RenderCompleteSemaphores)
+		{
+			vkDestroySemaphore(m_Device, semaphore, nullptr);
+		}
+		m_RenderCompleteSemaphores.clear();
+
+		if (m_Swapchain)
+		{
+			vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr);
+			m_Swapchain = VK_NULL_HANDLE;
+		}
+
+		if (m_DepthImageView)
+		{
+			vkDestroyImageView(m_Device, m_DepthImageView, nullptr);
+			vmaDestroyImage(m_VmaAllocator, m_DepthImage, m_DepthImageAllocation);
+			m_DepthImageView = VK_NULL_HANDLE;
+		}
 	}
 }
