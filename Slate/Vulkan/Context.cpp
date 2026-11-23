@@ -8,6 +8,9 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
+#include <slang.h>
+#include <slang-com-ptr.h>
+
 #include <SDL3/SDL_Vulkan.h>
 
 #include <print>
@@ -31,6 +34,7 @@ namespace Slate
 	VulkanContext::VulkanContext(SDL_Window* window, const ContextConfig& config)
 		: m_Window(window), m_Config(config)
 	{
+		// let SDL hand us the vulkan loader, then initialize volk with it
 		auto getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
 
 		if (!getInstanceProcAddr)
@@ -81,6 +85,7 @@ namespace Slate
 		const VkBool32 enableGpuValidation = config.EnableValidationGpu ? VK_TRUE : VK_FALSE;
 		const VkBool32 enableSyncValidation = config.EnableValidationSync ? VK_TRUE : VK_FALSE;
 
+		// layer settings toggle gpu-assisted and sync validation
 		const VkLayerSettingEXT layerSettings[]
 		{
 			{
@@ -137,13 +142,29 @@ namespace Slate
 
 	VulkanContext::~VulkanContext()
 	{
-		// TODO: Destroy swapchain and associated resources.
-
+		// wait in case resources are in use
 		if (m_Device != VK_NULL_HANDLE)
+		{
 			vkDeviceWaitIdle(m_Device);
 
-		if (m_Device != VK_NULL_HANDLE)
+			if (m_GraphicsPipeline != VK_NULL_HANDLE)
+				vkDestroyPipeline(m_Device, m_GraphicsPipeline, nullptr);
+
+			if (m_PipelineLayout != VK_NULL_HANDLE)
+				vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
+
+			// destroying the pool destroys its buffers implicitly
+			for (auto &res : m_FrameResources)
+			{
+				vkDestroyCommandPool(m_Device, res.commandPool, nullptr);
+				vkDestroySemaphore(m_Device, res.imageAcquiredSemaphore, nullptr);
+			}
+
+			if (m_TimelineSemaphore != VK_NULL_HANDLE)
+				vkDestroySemaphore(m_Device, m_TimelineSemaphore, nullptr);
+
 			DestroySwapChain();
+		}
 
 		if (m_VmaAllocator != VK_NULL_HANDLE)
 			vmaDestroyAllocator(m_VmaAllocator);
@@ -176,6 +197,7 @@ namespace Slate
 
 		VkPhysicalDevice selectedDevice = nullptr;
 
+		// default to first GPU, then look through the list and see if a dGPU exists
 		selectedDevice = devices[0];
 
 		for (auto &device : devices)
@@ -192,6 +214,7 @@ namespace Slate
 
 		m_PhysicalDevice = selectedDevice;
 
+		// ensure the desired swapchain format is supported
 		uint32_t formatCount = 0;
 		vkGetPhysicalDeviceSurfaceFormatsKHR(m_PhysicalDevice, m_Surface, &formatCount, nullptr);
 
@@ -231,6 +254,7 @@ namespace Slate
 
 			const auto &properties = queueFamilies[familyIndex];
 
+			// ensure this is a GRAPHICS queue with presentation support
 			if (properties.queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT && supportsPresent)
 			{
 				m_GraphicsQueueFamilyIndex = familyIndex;
@@ -243,6 +267,7 @@ namespace Slate
 
 	bool VulkanContext::CreateDevice(VkPhysicalDevice physicalDevice)
 	{
+		// query supported features
 		VkPhysicalDeviceVulkan14Features supportedFeatures14
 		{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES, .pNext = nullptr };
 		VkPhysicalDeviceVulkan13Features supportedFeatures13
@@ -259,6 +284,7 @@ namespace Slate
 			return false;
 		}
 
+		// produce a separate features struct chain for device creation
 		VkPhysicalDeviceVulkan14Features features14
 		{
 			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
@@ -289,6 +315,7 @@ namespace Slate
 			.pQueuePriorities = queuePriorities.data(),
 		};
 
+		// list the device extensions, handy for debugging
 		uint32_t extensionCount = 0;
 		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
 
@@ -347,6 +374,7 @@ namespace Slate
 			.vulkanApiVersion = m_Config.Version == VulkanVersion_1_4 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_3,
 		};
 
+		// vma can import directly from volk
 		VK_CHECK(vmaImportVulkanFunctionsFromVolk(&allocatorCreateInfo, &vmaFunctions));
 
 		VK_CHECK(vmaCreateAllocator(&allocatorCreateInfo, &m_VmaAllocator));
@@ -363,6 +391,7 @@ namespace Slate
 
 		VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_PhysicalDevice, m_Surface, &surfaceCaps));
 
+		// ask for at least two images, but don't go over the surfaces max
 		uint32_t requestedImageCount = std::max(2u, surfaceCaps.minImageCount);
 		if (surfaceCaps.maxImageCount > 0)
 		{
@@ -413,6 +442,7 @@ namespace Slate
 			VK_CHECK(vkCreateImageView(m_Device, &imageViewCreateInfo, nullptr, &m_SwapchainImageViews[i]));
 		}
 
+		// one rendercomplete semaphore per swapchain image
 		m_RenderCompleteSemaphores.resize(m_SwapchainImages.size());
 		for (VkSemaphore &semaphore : m_RenderCompleteSemaphores)
 		{
@@ -420,6 +450,7 @@ namespace Slate
 			VK_CHECK(vkCreateSemaphore(m_Device, &semaphoreCreateInfo, nullptr, &semaphore));
 		}
 
+		// create depth image
 		VkImageCreateInfo depthCreateInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -476,11 +507,522 @@ namespace Slate
 			m_Swapchain = VK_NULL_HANDLE;
 		}
 
+		// destroy the depth buffer along with the swapchain
 		if (m_DepthImageView)
 		{
 			vkDestroyImageView(m_Device, m_DepthImageView, nullptr);
 			vmaDestroyImage(m_VmaAllocator, m_DepthImage, m_DepthImageAllocation);
 			m_DepthImageView = VK_NULL_HANDLE;
 		}
+	}
+
+	VkShaderModule VulkanContext::CreateShaderModule(const char* source, const char* entryPointName)
+	{
+		// std::println("Compiling shader '{}':\n{}", entryPointName, source); // For debugging
+
+		Slang::ComPtr<slang::IGlobalSession> globalSession;
+		if (SLANG_FAILED(slang::createGlobalSession(globalSession.writeRef())))
+			return VK_NULL_HANDLE;
+
+		// target SPIR-V for Vulkan
+		slang::TargetDesc target
+		{
+			.format = SLANG_SPIRV,
+			.profile = globalSession->findProfile("spirv_1_6")
+		};
+
+		slang::SessionDesc sessionDesc
+		{
+			.targets = &target,
+			.targetCount = 1
+		};
+
+		Slang::ComPtr<slang::ISession> session;
+		if (SLANG_FAILED(globalSession->createSession(sessionDesc, session.writeRef())))
+			return VK_NULL_HANDLE;
+
+		Slang::ComPtr<slang::IBlob> diagnostics;
+
+		auto module = session->loadModuleFromSourceString("Shader", "Shader.slang", source, diagnostics.writeRef());
+
+		if (diagnostics)
+			std::println(stderr, "{}", static_cast<const char*>(diagnostics->getBufferPointer()));
+
+		if (!module)
+			return VK_NULL_HANDLE;
+
+		Slang::ComPtr<slang::IEntryPoint> entryPoint;
+		if (SLANG_FAILED(module->findEntryPointByName(entryPointName, entryPoint.writeRef())))
+			return VK_NULL_HANDLE;
+
+		// combine the module and entry point into one program, then link it
+		slang::IComponentType* components[] = { module, entryPoint };
+
+		Slang::ComPtr<slang::IComponentType> program;
+		if (SLANG_FAILED(session->createCompositeComponentType(components, 2, program.writeRef(), diagnostics.writeRef())))
+			return VK_NULL_HANDLE;
+
+		Slang::ComPtr<slang::IComponentType> linkedProgram;
+		if (SLANG_FAILED(program->link(linkedProgram.writeRef(), diagnostics.writeRef())))
+			return VK_NULL_HANDLE;
+
+		Slang::ComPtr<slang::IBlob> spirv;
+		if (SLANG_FAILED(linkedProgram->getEntryPointCode(0, 0, spirv.writeRef(), diagnostics.writeRef())))
+			return VK_NULL_HANDLE;
+
+		// pass spir-v to vulkan and create the shader module
+		VkShaderModuleCreateInfo createInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+			.codeSize = spirv->getBufferSize(),
+			.pCode = static_cast<const uint32_t*>(spirv->getBufferPointer())
+		};
+
+		VkShaderModule shaderModule = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateShaderModule(m_Device, &createInfo, nullptr, &shaderModule));
+
+		return shaderModule;
+	}
+
+	VkPipeline VulkanContext::CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader)
+	{
+		// empty pipeline layout for now, no descriptors or push constants
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+			.setLayoutCount = 0,
+			.pushConstantRangeCount = 0,
+		};
+
+		VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineLayoutCreateInfo, nullptr, &m_PipelineLayout));
+
+		VkShaderModule vertexModule = CreateShaderModule(vertexShader, "vertexMain");
+		VkShaderModule fragmentModule = CreateShaderModule(fragmentShader, "fragmentMain");
+
+		if (vertexModule == VK_NULL_HANDLE || fragmentModule == VK_NULL_HANDLE)
+		{
+			if (vertexModule != VK_NULL_HANDLE)
+				vkDestroyShaderModule(m_Device, vertexModule, nullptr);
+
+			if (fragmentModule != VK_NULL_HANDLE)
+				vkDestroyShaderModule(m_Device, fragmentModule, nullptr);
+
+			return VK_NULL_HANDLE;
+		}
+
+		const VkPipelineShaderStageCreateInfo shaderStages[]
+		{
+			{
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+				.stage = VK_SHADER_STAGE_VERTEX_BIT,
+				.module = vertexModule,
+				.pName = "main"
+			},
+			{
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+				.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+				.module = fragmentModule,
+				.pName = "main"
+			}
+		};
+
+		// vertex pulling, don't define vertex input details
+		VkPipelineVertexInputStateCreateInfo vertInputInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+		};
+
+		VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+			.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+		};
+
+		VkPipelineDepthStencilStateCreateInfo depthStencilInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+			.depthTestEnable = VK_TRUE,
+			.depthWriteEnable = VK_TRUE,
+			.depthCompareOp = VK_COMPARE_OP_LESS,
+			.stencilTestEnable = VK_FALSE,
+		};
+
+		// viewport and scissor are set dynamically, we still need this struct though
+		VkPipelineViewportStateCreateInfo viewportInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+			.viewportCount = 1,
+			.pViewports = nullptr,
+			.scissorCount = 1,
+			.pScissors = nullptr,
+		};
+
+		VkPipelineRasterizationStateCreateInfo rasterInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+			.polygonMode = VK_POLYGON_MODE_FILL,
+			.cullMode = VK_CULL_MODE_BACK_BIT,
+			.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+			.lineWidth = 1.0f,
+		};
+
+		VkPipelineMultisampleStateCreateInfo multisampleInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+			.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+		};
+
+		// blending is disabled for now, still need attachment info and write mask
+		VkPipelineColorBlendAttachmentState attachmentState
+		{
+			.blendEnable = VK_FALSE,
+			.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+		};
+
+		VkPipelineColorBlendStateCreateInfo blendInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+			.attachmentCount = 1,
+			.pAttachments = &attachmentState,
+		};
+
+		std::vector<VkDynamicState> dynamicState
+		{
+			VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR
+		};
+		VkPipelineDynamicStateCreateInfo dynamicStateInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+			.dynamicStateCount = static_cast<uint32_t>(dynamicState.size()),
+			.pDynamicStates = dynamicState.data(),
+		};
+
+		// structure required for dynamic rendering
+		VkPipelineRenderingCreateInfo renderInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+			.colorAttachmentCount = 1,
+			.pColorAttachmentFormats = &m_SwapchainFormat,
+			.depthAttachmentFormat = m_DepthFormat,
+		};
+
+		VkGraphicsPipelineCreateInfo pipelineInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+			.pNext = &renderInfo,
+			.stageCount = 2,
+			.pStages = shaderStages,
+			.pVertexInputState = &vertInputInfo,
+			.pInputAssemblyState = &inputAssemblyInfo,
+			.pViewportState = &viewportInfo,
+			.pRasterizationState = &rasterInfo,
+			.pMultisampleState = &multisampleInfo,
+			.pDepthStencilState = &depthStencilInfo,
+			.pColorBlendState = &blendInfo,
+			.pDynamicState = &dynamicStateInfo,
+			.layout = m_PipelineLayout,
+			.renderPass = VK_NULL_HANDLE
+		};
+
+		VkPipeline pipeline = VK_NULL_HANDLE;
+
+		VkResult result = vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+
+		// shader modules aren't needed once the pipeline exists
+		vkDestroyShaderModule(m_Device, vertexModule, nullptr);
+		vkDestroyShaderModule(m_Device, fragmentModule, nullptr);
+
+		VK_CHECK(result);
+
+		m_GraphicsPipeline = pipeline;
+		return pipeline;
+	}
+
+	bool VulkanContext::CreateSyncResources()
+	{
+		// timeline semaphore tracks when each frame is completed
+		VkSemaphoreTypeCreateInfo semaphoreTypeInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+			.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+			.initialValue = MaxFramesInFlight
+		};
+		VkSemaphoreCreateInfo semaphoreInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+			.pNext = &semaphoreTypeInfo
+		};
+
+		VK_CHECK(vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_TimelineSemaphore));
+
+		// per-frame image-acquire semaphores (binary)
+		for (FrameResources &res : m_FrameResources)
+		{
+			VkSemaphoreCreateInfo semaphoreInfo{ .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+			VK_CHECK(vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &res.imageAcquiredSemaphore));
+		}
+
+		return true;
+	}
+
+	bool VulkanContext::CreateCommandBuffers()
+	{
+		for (FrameResources &res : m_FrameResources)
+		{
+			// each frame gets its own pool, faster cmd buffer resets this way
+			VkCommandPoolCreateInfo poolInfo
+			{
+				.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+				.queueFamilyIndex = m_GraphicsQueueFamilyIndex,
+			};
+			VK_CHECK(vkCreateCommandPool(m_Device, &poolInfo, nullptr, &res.commandPool));
+
+			VkCommandBufferAllocateInfo cmdAllocInfo
+			{
+				.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+				.commandPool = res.commandPool,
+				.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+				.commandBufferCount = 1,
+			};
+			VK_CHECK(vkAllocateCommandBuffers(m_Device, &cmdAllocInfo, &res.commandBuffer));
+		}
+		return true;
+	}
+
+	void VulkanContext::Render()
+	{
+		// first check if our swapchain is still valid
+		if (m_RequireSwapchainRecreate)
+		{
+			vkDeviceWaitIdle(m_Device);
+			DestroySwapChain();
+			CreateSwapChain(1600, 900);
+			m_RequireSwapchainRecreate = false;
+		}
+
+		const uint32_t frameResIndex = frameIndex++ % MaxFramesInFlight;
+		const uint64_t signalValue = nextSignalValue++;
+		const uint64_t waitValue = signalValue - MaxFramesInFlight;
+
+		// wait until the gpu is done with this frame's resources
+		VkSemaphoreWaitInfo waitInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+			.semaphoreCount = 1,
+			.pSemaphores = &m_TimelineSemaphore,
+			.pValues = &waitValue
+		};
+		vkWaitSemaphores(m_Device, &waitInfo, UINT64_MAX);
+
+		// now its safe to start recording commands
+		FrameResources &res = m_FrameResources[frameResIndex];
+		vkResetCommandPool(m_Device, res.commandPool, 0);
+
+		VkSemaphore imageAcquireSemaphore = m_FrameResources[frameResIndex].imageAcquiredSemaphore;
+
+		uint32_t imageIndex = 0;
+		VkResult acquireResult = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, imageAcquireSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+		// handle resize and out-of-date images, may need swapchain recreate
+		if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
+		{
+			m_RequireSwapchainRecreate = true;
+			return;
+		}
+		else if (acquireResult == VK_SUBOPTIMAL_KHR)
+		{
+			// can render this frame, recreate next time around
+			m_RequireSwapchainRecreate = true;
+		}
+
+		VkCommandBufferBeginInfo cmdBeginInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+		};
+		vkBeginCommandBuffer(res.commandBuffer, &cmdBeginInfo);
+
+		// transition the color and depth images
+		std::vector<VkImageMemoryBarrier2> layoutBarriers
+		{
+			{
+				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+				.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+				.srcAccessMask = 0,
+				.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+				.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+				.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+				.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				.image = m_SwapchainImages[imageIndex],
+				.subresourceRange
+				{
+					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+					.baseMipLevel = 0,
+					.levelCount = 1,
+					.baseArrayLayer = 0,
+					.layerCount = 1,
+				}
+			},
+			{
+				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+				.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+				.srcAccessMask = 0,
+				.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, // both specified to control memory access at both stages (write)
+				.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+				.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+				.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+				.image = m_DepthImage,
+				.subresourceRange
+				{
+					.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+					.baseMipLevel = 0,
+					.levelCount = 1,
+					.baseArrayLayer = 0,
+					.layerCount = 1,
+				}
+			}
+		};
+		VkDependencyInfo depInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+			.imageMemoryBarrierCount = static_cast<uint32_t>(layoutBarriers.size()),
+			.pImageMemoryBarriers = layoutBarriers.data()
+		};
+		vkCmdPipelineBarrier2(res.commandBuffer, &depInfo);
+
+		VkRenderingAttachmentInfo colorAttachInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+			.imageView = m_SwapchainImageViews[imageIndex],
+			.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, // clear the image
+			.storeOp = VK_ATTACHMENT_STORE_OP_STORE, // keep data for presentation
+			.clearValue{.color{0.01f, 0.01f, 0.01f, 1}}
+		};
+		VkRenderingAttachmentInfo depthAttachInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+			.imageView = m_DepthImageView,
+			.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+			.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, // clear the depth data
+			.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE, // don't care after rendering
+			.clearValue{.depthStencil{1.0f, 0}}
+		};
+		VkRenderingInfo renderingInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+			.renderArea
+			{
+				.offset{.x = 0, .y = 0},
+				.extent{.width = m_SwapchainWidth, .height = m_SwapchainHeight}
+			},
+			.layerCount = 1,
+			.colorAttachmentCount = 1,
+			.pColorAttachments = &colorAttachInfo,
+			.pDepthAttachment = &depthAttachInfo
+		};
+
+		vkCmdBeginRendering(res.commandBuffer, &renderingInfo);
+		{
+			VkViewport viewport
+			{
+				.x = 0, .y = 0,
+				.width = static_cast<float>(m_SwapchainWidth),
+				.height = static_cast<float>(m_SwapchainHeight)
+			};
+			vkCmdSetViewport(res.commandBuffer, 0, 1, &viewport);
+
+			VkRect2D scissor
+			{
+				.offset{.x = 0, .y = 0 },
+				.extent{.width = m_SwapchainWidth, .height = m_SwapchainHeight}
+			};
+			vkCmdSetScissor(res.commandBuffer, 0, 1, &scissor);
+
+			// draw our triangle
+			vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GraphicsPipeline);
+			vkCmdDraw(res.commandBuffer, 3, 1, 0, 0);
+		}
+		vkCmdEndRendering(res.commandBuffer);
+
+		// transition the image from color attachment to presentation so we can show it
+		VkImageMemoryBarrier2 presentLayoutBarrier
+		{
+			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+			.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+			.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+			.dstStageMask = VK_PIPELINE_STAGE_2_NONE, // nothing is waiting, but the cache is flushed and layout is transition
+			.dstAccessMask = 0,
+			.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+			.image = m_SwapchainImages[imageIndex],
+			.subresourceRange
+			{
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			}
+		};
+		VkDependencyInfo presentDepInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+			.imageMemoryBarrierCount = 1,
+			.pImageMemoryBarriers = &presentLayoutBarrier
+		};
+		vkCmdPipelineBarrier2(res.commandBuffer, &presentDepInfo);
+
+		vkEndCommandBuffer(res.commandBuffer);
+
+		VkSemaphoreSubmitInfo imageAcquireWaitInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+			.semaphore = imageAcquireSemaphore,
+			.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT // wait before drawing to image
+		};
+		std::vector<VkSemaphoreSubmitInfo> semaphoreSignals
+		{
+			{ // render work completion signal
+				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+				.semaphore = m_RenderCompleteSemaphores[imageIndex],
+				.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+			},
+			{ // entire frame is completed (timeline)
+				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+				.semaphore = m_TimelineSemaphore,
+				.value = signalValue,
+				.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+			}
+		};
+		VkCommandBufferSubmitInfo cmdSubmitInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+			.commandBuffer = res.commandBuffer,
+		};
+		VkSubmitInfo2 submitInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+			.waitSemaphoreInfoCount = 1,
+			.pWaitSemaphoreInfos = &imageAcquireWaitInfo, // ensure the image is ready
+			.commandBufferInfoCount = 1,
+			.pCommandBufferInfos = &cmdSubmitInfo,
+			.signalSemaphoreInfoCount = static_cast<uint32_t>(semaphoreSignals.size()),
+			.pSignalSemaphoreInfos = semaphoreSignals.data()
+		};
+		vkQueueSubmit2(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+
+		VkPresentInfoKHR presentInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+			.waitSemaphoreCount = 1,
+			.pWaitSemaphores = &m_RenderCompleteSemaphores[imageIndex], // render work completed semaphore
+			.swapchainCount = 1,
+			.pSwapchains = &m_Swapchain,
+			.pImageIndices = &imageIndex,
+			.pResults = nullptr
+		};
+
+		vkQueuePresentKHR(m_GraphicsQueue, &presentInfo);
 	}
 }

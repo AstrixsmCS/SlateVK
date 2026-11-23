@@ -3,12 +3,20 @@
 #include "Slate/Slate.hpp"
 
 #include <volk.h>
-#include "vk_mem_alloc.h"
+#include <vk_mem_alloc.h>
 
 #include <vector>
+#include <array>
 
 namespace Slate
 {
+	struct FrameResources
+	{
+		VkCommandPool commandPool = { VK_NULL_HANDLE };
+		VkCommandBuffer commandBuffer = { VK_NULL_HANDLE };
+		VkSemaphore imageAcquiredSemaphore = { VK_NULL_HANDLE };
+	};
+
 	class VulkanContext final : public Context
 	{
 	public:
@@ -22,6 +30,14 @@ namespace Slate
 		bool InitializeVMA();
 		bool CreateSwapChain(uint32_t width, uint32_t height);
 		void DestroySwapChain();
+
+		VkShaderModule CreateShaderModule(const char* source, const char* entryPointName);
+		VkPipeline CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader) override;
+
+		bool CreateSyncResources();
+		bool CreateCommandBuffers();
+
+		void Render() override;
 	private:
 		SDL_Window* m_Window = { nullptr };
 		ContextConfig m_Config {};
@@ -43,6 +59,7 @@ namespace Slate
 		std::vector<VkImage> m_SwapchainImages;
 		std::vector<VkImageView> m_SwapchainImageViews;
 		std::vector<VkSemaphore> m_RenderCompleteSemaphores;
+		bool m_RequireSwapchainRecreate = false;
 		uint32_t m_SwapchainWidth { 0 };
 		uint32_t m_SwapchainHeight { 0 };
 
@@ -50,5 +67,15 @@ namespace Slate
 		VkImageView m_DepthImageView = { VK_NULL_HANDLE };
 		VkFormat m_DepthFormat = { VK_FORMAT_D32_SFLOAT };
 		VmaAllocation m_DepthImageAllocation = { VK_NULL_HANDLE };
+
+		VkPipelineLayout m_PipelineLayout = { VK_NULL_HANDLE };
+		VkPipeline m_GraphicsPipeline = { VK_NULL_HANDLE };
+
+		VkSemaphore m_TimelineSemaphore = { VK_NULL_HANDLE };
+		constexpr static uint32_t MaxFramesInFlight{ 2 };
+		std::array<FrameResources, MaxFramesInFlight> m_FrameResources = {};
+
+		uint64_t frameIndex { 0 };
+		uint64_t nextSignalValue = MaxFramesInFlight + 1;
 	};
 }

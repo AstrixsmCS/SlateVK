@@ -2,6 +2,8 @@
 
 #include "Vulkan/Context.hpp"
 
+#include <SDL3/SDL.h>
+
 namespace Slate
 {
 	std::unique_ptr<Context> CreateContext(SDL_Window* window, const ContextConfig& config)
@@ -26,6 +28,12 @@ namespace Slate
 			return nullptr;
 
 		if (!context->CreateSwapChain(1600, 900))
+			return nullptr;
+
+		if (!context->CreateSyncResources())
+			return nullptr;
+
+		if (!context->CreateCommandBuffers())
 			return nullptr;
 
 		return context;

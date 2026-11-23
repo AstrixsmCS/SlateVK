@@ -81,3 +81,4 @@ endfunction()
 # Add examples here as the library develops.
 # slate_add_example(001_ClearScreen)
 slate_add_example(000_Window)
+slate_add_example(001_HelloTriangle)

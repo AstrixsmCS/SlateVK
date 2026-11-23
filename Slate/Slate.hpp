@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include <volk.h>
+
 struct SDL_Window;
 
 namespace Slate
@@ -27,6 +29,9 @@ namespace Slate
 	{
 	public:
 		virtual ~Context() = default;
+
+		virtual VkPipeline CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader) = 0;
+		virtual void Render() = 0;
 	};
 
 	std::unique_ptr<Context> CreateContext(SDL_Window* window, const ContextConfig& config = {});
