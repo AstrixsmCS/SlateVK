@@ -534,7 +534,8 @@ namespace Slate
 		slang::SessionDesc sessionDesc
 		{
 			.targets = &target,
-			.targetCount = 1
+			.targetCount = 1,
+			.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR
 		};
 
 		Slang::ComPtr<slang::ISession> session;
@@ -586,12 +587,21 @@ namespace Slate
 
 	VkPipeline VulkanContext::CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader)
 	{
+
+		VkPushConstantRange pushConstantRange
+		{
+			.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+			.offset = 0,
+			.size = sizeof(float) * 16
+		};
+
 		// empty pipeline layout for now, no descriptors or push constants
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
 			.setLayoutCount = 0,
-			.pushConstantRangeCount = 0,
+			.pushConstantRangeCount = 1,
+			.pPushConstantRanges = &pushConstantRange
 		};
 
 		VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineLayoutCreateInfo, nullptr, &m_PipelineLayout));
@@ -789,7 +799,7 @@ namespace Slate
 		return true;
 	}
 
-	void VulkanContext::Render()
+	void VulkanContext::Render(const float* mvp)
 	{
 		// first check if our swapchain is still valid
 		if (m_RequireSwapchainRecreate)
@@ -926,9 +936,12 @@ namespace Slate
 		{
 			VkViewport viewport
 			{
-				.x = 0, .y = 0,
+				.x = 0,
+				.y = 0,
 				.width = static_cast<float>(m_SwapchainWidth),
-				.height = static_cast<float>(m_SwapchainHeight)
+				.height = static_cast<float>(m_SwapchainHeight),
+				.minDepth = 0.0f,
+				.maxDepth = 1.0f
 			};
 			vkCmdSetViewport(res.commandBuffer, 0, 1, &viewport);
 
@@ -941,6 +954,9 @@ namespace Slate
 
 			// draw our triangle
 			vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GraphicsPipeline);
+
+			vkCmdPushConstants(res.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 16, mvp);
+
 			vkCmdDraw(res.commandBuffer, 3, 1, 0, 0);
 		}
 		vkCmdEndRendering(res.commandBuffer);

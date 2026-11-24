@@ -10,7 +10,15 @@ FetchContent_Declare(imgui
 		EXCLUDE_FROM_ALL
 )
 
-FetchContent_MakeAvailable(imgui)
+FetchContent_Declare(glm
+		GIT_REPOSITORY https://github.com/g-truc/glm.git
+		GIT_TAG 1.0.2
+		GIT_SHALLOW TRUE
+		SYSTEM
+		EXCLUDE_FROM_ALL
+)
+
+FetchContent_MakeAvailable(imgui glm)
 
 # ==== ImGui ====
 
@@ -73,7 +81,7 @@ endfunction()
 
 function(slate_add_example name)
 	add_executable(${name} "${name}.cpp")
-	target_link_libraries(${name} PRIVATE SlateApp)
+	target_link_libraries(${name} PRIVATE SlateApp glm::glm)
 	set_target_properties(${name} PROPERTIES FOLDER "Examples")
 	slate_copy_runtime_files(${name})
 endfunction()

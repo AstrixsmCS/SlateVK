@@ -37,7 +37,7 @@ namespace Slate
 		bool CreateSyncResources();
 		bool CreateCommandBuffers();
 
-		void Render() override;
+		void Render(const float* mvp) override;
 	private:
 		SDL_Window* m_Window = { nullptr };
 		ContextConfig m_Config {};

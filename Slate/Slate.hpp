@@ -8,7 +8,6 @@ struct SDL_Window;
 
 namespace Slate
 {
-
 	enum VulkanVersion
 	{
 		VulkanVersion_1_3 = 0,
@@ -31,7 +30,7 @@ namespace Slate
 		virtual ~Context() = default;
 
 		virtual VkPipeline CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader) = 0;
-		virtual void Render() = 0;
+		virtual void Render(const float* mvp) = 0;
 	};
 
 	std::unique_ptr<Context> CreateContext(SDL_Window* window, const ContextConfig& config = {});
