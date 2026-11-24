@@ -32,7 +32,7 @@ namespace Slate
 		void DestroySwapChain();
 
 		VkShaderModule CreateShaderModule(const char* source, const char* entryPointName);
-		VkPipeline CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader) override;
+		VkPipeline CreateGraphicsPipeline(const GraphicsPipelineSpecification& spec) override;
 
 		bool CreateSyncResources();
 		bool CreateCommandBuffers();
@@ -72,7 +72,7 @@ namespace Slate
 		VkPipeline m_GraphicsPipeline = { VK_NULL_HANDLE };
 
 		VkSemaphore m_TimelineSemaphore = { VK_NULL_HANDLE };
-		constexpr static uint32_t MaxFramesInFlight{ 2 };
+		constexpr static uint32_t MaxFramesInFlight{ 3 };
 		std::array<FrameResources, MaxFramesInFlight> m_FrameResources = {};
 
 		uint64_t frameIndex { 0 };

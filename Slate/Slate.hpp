@@ -8,6 +8,12 @@ struct SDL_Window;
 
 namespace Slate
 {
+	struct GraphicsPipelineSpecification final
+	{
+		const char* VertexShader = nullptr;
+		const char* FragmentShader = nullptr;
+	};
+
 	enum VulkanVersion
 	{
 		VulkanVersion_1_3 = 0,
@@ -29,7 +35,7 @@ namespace Slate
 	public:
 		virtual ~Context() = default;
 
-		virtual VkPipeline CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader) = 0;
+		virtual VkPipeline CreateGraphicsPipeline(const GraphicsPipelineSpecification& spec) = 0;
 		virtual void Render(const float* mvp) = 0;
 	};
 

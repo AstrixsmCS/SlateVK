@@ -585,9 +585,8 @@ namespace Slate
 		return shaderModule;
 	}
 
-	VkPipeline VulkanContext::CreateGraphicsPipeline(const char* vertexShader, const char* fragmentShader)
+	VkPipeline VulkanContext::CreateGraphicsPipeline(const GraphicsPipelineSpecification& spec)
 	{
-
 		VkPushConstantRange pushConstantRange
 		{
 			.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -606,8 +605,8 @@ namespace Slate
 
 		VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineLayoutCreateInfo, nullptr, &m_PipelineLayout));
 
-		VkShaderModule vertexModule = CreateShaderModule(vertexShader, "vertexMain");
-		VkShaderModule fragmentModule = CreateShaderModule(fragmentShader, "fragmentMain");
+		VkShaderModule vertexModule = CreateShaderModule(spec.VertexShader, "vertexMain");
+		VkShaderModule fragmentModule = CreateShaderModule(spec.FragmentShader, "fragmentMain");
 
 		if (vertexModule == VK_NULL_HANDLE || fragmentModule == VK_NULL_HANDLE)
 		{

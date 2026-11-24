@@ -76,7 +76,7 @@ int main()
 	if (!context)
 		return -1;
 
-	if (!context->CreateGraphicsPipeline(vertexShader, fragmentShader))
+	if (!context->CreateGraphicsPipeline( {.VertexShader = vertexShader, .FragmentShader = fragmentShader} ))
 		return -1;
 
 	while (app.IsRunning())
