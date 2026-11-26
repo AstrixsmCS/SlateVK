@@ -4,12 +4,17 @@
 
 #include <volk.h>
 
+#include <vector>
+
 struct SDL_Window;
 
 namespace Slate
 {
 	struct GraphicsPipelineSpecification final
 	{
+		std::vector<VkVertexInputBindingDescription> Binding;
+		std::vector<VkVertexInputAttributeDescription> Attributes;
+
 		const char* VertexShader = nullptr;
 		const char* FragmentShader = nullptr;
 	};
@@ -36,7 +41,8 @@ namespace Slate
 		virtual ~Context() = default;
 
 		virtual VkPipeline CreateGraphicsPipeline(const GraphicsPipelineSpecification& spec) = 0;
-		virtual void Render(const float* mvp) = 0;
+		virtual VkBuffer CreateBuffer(const void* data, VkDeviceSize size, VkBufferUsageFlags usage) = 0;
+		virtual void Render(const float* mvp, VkBuffer vertexBuffer, VkBuffer indexBuffer, uint32_t indexCount) = 0;
 	};
 
 	std::unique_ptr<Context> CreateContext(SDL_Window* window, const ContextConfig& config = {});

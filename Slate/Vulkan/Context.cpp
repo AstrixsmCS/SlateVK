@@ -167,7 +167,16 @@ namespace Slate
 		}
 
 		if (m_VmaAllocator != VK_NULL_HANDLE)
+		{
+			for (const VulkanBuffer& buffer : m_Buffers)
+			{
+				vmaDestroyBuffer(m_VmaAllocator, buffer.Handle, buffer.Allocation);
+			}
+
+			m_Buffers.clear();
+
 			vmaDestroyAllocator(m_VmaAllocator);
+		}
 
 		if (m_Device != VK_NULL_HANDLE)
 			vkDestroyDevice(m_Device, nullptr);
@@ -635,10 +644,13 @@ namespace Slate
 			}
 		};
 
-		// vertex pulling, don't define vertex input details
 		VkPipelineVertexInputStateCreateInfo vertInputInfo
 		{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+			.vertexBindingDescriptionCount = static_cast<uint32_t>(spec.Binding.size()),
+			.pVertexBindingDescriptions = spec.Binding.data(),
+			.vertexAttributeDescriptionCount = static_cast<uint32_t>(spec.Attributes.size()),
+			.pVertexAttributeDescriptions = spec.Attributes.data()
 		};
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo
@@ -798,7 +810,7 @@ namespace Slate
 		return true;
 	}
 
-	void VulkanContext::Render(const float* mvp)
+	void VulkanContext::Render(const float* mvp, VkBuffer vertexBuffer, VkBuffer indexBuffer, uint32_t indexCount)
 	{
 		// first check if our swapchain is still valid
 		if (m_RequireSwapchainRecreate)
@@ -936,9 +948,9 @@ namespace Slate
 			VkViewport viewport
 			{
 				.x = 0,
-				.y = 0,
+				.y = static_cast<float>(m_SwapchainHeight),
 				.width = static_cast<float>(m_SwapchainWidth),
-				.height = static_cast<float>(m_SwapchainHeight),
+				.height = -static_cast<float>(m_SwapchainHeight),
 				.minDepth = 0.0f,
 				.maxDepth = 1.0f
 			};
@@ -956,7 +968,12 @@ namespace Slate
 
 			vkCmdPushConstants(res.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 16, mvp);
 
-			vkCmdDraw(res.commandBuffer, 3, 1, 0, 0);
+			VkDeviceSize offset = 0;
+
+			vkCmdBindVertexBuffers(res.commandBuffer, 0, 1, &vertexBuffer, &offset );
+			vkCmdBindIndexBuffer(res.commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+			vkCmdDrawIndexed(res.commandBuffer, indexCount, 1, 0, 0, 0);
 		}
 		vkCmdEndRendering(res.commandBuffer);
 
@@ -1039,5 +1056,32 @@ namespace Slate
 		};
 
 		vkQueuePresentKHR(m_GraphicsQueue, &presentInfo);
+	}
+
+	VkBuffer VulkanContext::CreateBuffer(const void* data, VkDeviceSize size, VkBufferUsageFlags usage)
+	{
+		VkBufferCreateInfo bufferInfo
+		{
+			.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+			.size = size,
+			.usage = usage,
+			.sharingMode = VK_SHARING_MODE_EXCLUSIVE
+		};
+
+		VmaAllocationCreateInfo allocationInfo
+		{
+			.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+			.usage = VMA_MEMORY_USAGE_AUTO
+		};
+
+		VulkanBuffer buffer;
+
+		VK_CHECK(vmaCreateBuffer(m_VmaAllocator, &bufferInfo, &allocationInfo, &buffer.Handle, &buffer.Allocation, nullptr));
+
+		VK_CHECK(vmaCopyMemoryToAllocation(m_VmaAllocator, data, buffer.Allocation, 0, size));
+
+		m_Buffers.push_back(buffer);
+
+		return buffer.Handle;
 	}
 }

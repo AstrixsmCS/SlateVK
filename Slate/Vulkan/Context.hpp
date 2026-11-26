@@ -17,6 +17,12 @@ namespace Slate
 		VkSemaphore imageAcquiredSemaphore = { VK_NULL_HANDLE };
 	};
 
+	struct VulkanBuffer
+	{
+		VkBuffer Handle = { VK_NULL_HANDLE };
+		VmaAllocation Allocation = { VK_NULL_HANDLE };
+	};
+
 	class VulkanContext final : public Context
 	{
 	public:
@@ -33,11 +39,12 @@ namespace Slate
 
 		VkShaderModule CreateShaderModule(const char* source, const char* entryPointName);
 		VkPipeline CreateGraphicsPipeline(const GraphicsPipelineSpecification& spec) override;
+		VkBuffer CreateBuffer(const void* data, VkDeviceSize size, VkBufferUsageFlags usage) override;
 
 		bool CreateSyncResources();
 		bool CreateCommandBuffers();
 
-		void Render(const float* mvp) override;
+		void Render(const float* mvp, VkBuffer vertexBuffer, VkBuffer indexBuffer, uint32_t indexCount) override;
 	private:
 		SDL_Window* m_Window = { nullptr };
 		ContextConfig m_Config {};
@@ -77,5 +84,7 @@ namespace Slate
 
 		uint64_t frameIndex { 0 };
 		uint64_t nextSignalValue = MaxFramesInFlight + 1;
+
+		std::vector<VulkanBuffer> m_Buffers;
 	};
 }
